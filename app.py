@@ -1,154 +1,177 @@
+import pygame
+import requests
+import random
+import sys
+
 # =========================
-# FULL ONLINE GAME BACKEND
-# LOGIN + LEADERBOARD + BASIC ANTI CHEAT
+# SERVER URL
 # =========================
+API_URL = "https://mygame-yougottabegood.onrender.com"
 
-from flask import Flask, request, jsonify
-import os
-import json
-import time
-import secrets
+# =========================
+# LOGIN (einfach über Konsole)
+# =========================
+print("1 = Login")
+print("2 = Register")
+choice = input("Wähle: ")
 
-app = Flask(__name__)
+username = input("Username: ")
+password = input("Password: ")
 
-# -------------------------
-# DATA FILES
-# -------------------------
-USERS_FILE = "users.json"
-
-# username -> {password, token, best_score, last_submit}
-if os.path.exists(USERS_FILE):
-    with open(USERS_FILE, "r") as f:
-        users = json.load(f)
+if choice == "2":
+    r = requests.post(API_URL + "/register", json={
+        "username": username,
+        "password": password
+    })
 else:
-    users = {}
+    r = requests.post(API_URL + "/login", json={
+        "username": username,
+        "password": password
+    })
 
-# -------------------------
-# HELPERS
-# -------------------------
-def save_users():
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f)
+data = r.json()
 
+if "token" not in data:
+    print("Login fehlgeschlagen:", data)
+    sys.exit()
 
-def generate_token():
-    return secrets.token_hex(16)
+TOKEN = data["token"]
+print("Login erfolgreich!")
 
+# =========================
+# GAME SETUP
+# =========================
+pygame.init()
 
-def get_user_by_token(token):
-    for username, data in users.items():
-        if data.get("token") == token:
-            return username
-    return None
+WIDTH, HEIGHT = 800, 600
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Online Arcade Game")
+clock = pygame.time.Clock()
 
-# -------------------------
-# REGISTER
-# -------------------------
-@app.route("/register", methods=["POST"])
-def register():
-    data = request.json
-    username = data.get("username")
-    password = data.get("password")
+WHITE = (255, 255, 255)
+RED = (255, 0, 0)
 
-    if not username or not password:
-        return {"error": "missing fields"}, 400
+player_size = 50
+player_pos = [WIDTH//2, HEIGHT-100]
+base_speed = 6
+player_speed = base_speed
 
-    if username in users:
-        return {"error": "user exists"}, 400
+enemy_size = 50
+enemies = []
+enemy_speed = 4
 
-    token = generate_token()
+score = 0
+font = pygame.font.SysFont("Arial", 30)
 
-    users[username] = {
-        "password": password,
-        "token": token,
-        "best_score": 0,
-        "last_submit": 0
-    }
+# =========================
+# FUNCTIONS
+# =========================
+def spawn_enemy():
+    if random.random() < 0.03:
+        enemies.append([random.randint(0, WIDTH-enemy_size), 0])
 
-    save_users()
+def update_enemies():
+    global score, enemy_speed
+    for e in enemies[:]:
+        e[1] += enemy_speed
+        if e[1] > HEIGHT:
+            enemies.remove(e)
+            score += 1
+            enemy_speed += 0.1
 
-    return {"token": token}
+def collision():
+    px, py = player_pos
+    for ex, ey in enemies:
+        if ex < px < ex+enemy_size or ex < px+player_size < ex+enemy_size:
+            if ey < py < ey+enemy_size or ey < py+player_size < ey+enemy_size:
+                return True
+    return False
 
-# -------------------------
-# LOGIN
-# -------------------------
-@app.route("/login", methods=["POST"])
-def login():
-    data = request.json
-    username = data.get("username")
-    password = data.get("password")
-
-    user = users.get(username)
-
-    if not user or user["password"] != password:
-        return {"error": "invalid login"}, 401
-
-    # new token each login
-    token = generate_token()
-    user["token"] = token
-
-    save_users()
-
-    return {"token": token}
-
-# -------------------------
-# SUBMIT SCORE (ANTI CHEAT)
-# -------------------------
-@app.route("/score", methods=["POST"])
-def score():
-    data = request.json
-    token = data.get("token")
-    score = int(data.get("score", 0))
-
-    username = get_user_by_token(token)
-    if not username:
-        return {"error": "invalid token"}, 403
-
-    user = users[username]
-
-    now = time.time()
-
-    # anti spam (1 submission per 3 sec)
-    if now - user["last_submit"] < 3:
-        return {"error": "too fast"}, 429
-
-    user["last_submit"] = now
-
-    # only accept higher scores
-    if score > user["best_score"]:
-        user["best_score"] = score
-
-    save_users()
-
-    return {"status": "ok", "best": user["best_score"]}
-
-# -------------------------
-# LEADERBOARD
-# -------------------------
-@app.route("/leaderboard", methods=["GET"])
-def leaderboard():
-    board = []
-
-    for username, data in users.items():
-        board.append({
-            "name": username,
-            "score": data.get("best_score", 0)
+def send_score():
+    try:
+        requests.post(API_URL + "/score", json={
+            "token": TOKEN,
+            "score": score
         })
+    except:
+        print("Server nicht erreichbar")
 
-    board.sort(key=lambda x: x["score"], reverse=True)
+def get_leaderboard():
+    try:
+        r = requests.get(API_URL + "/leaderboard")
+        return r.json()
+    except:
+        return []
 
-    return jsonify(board[:50])
+# =========================
+# GAME LOOP
+# =========================
+running = True
+game_over = False
+show_lb = False
+leaderboard = []
 
-# -------------------------
-# HOME
-# -------------------------
-@app.route("/")
-def home():
-    return "Game Server Running 🚀"
+while running:
+    screen.fill((0, 0, 0))
 
-# -------------------------
-# START
-# -------------------------
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+        if event.type == pygame.KEYDOWN:
+            if game_over and event.key == pygame.K_r:
+                # reset
+                player_pos = [WIDTH//2, HEIGHT-100]
+                enemies.clear()
+                score = 0
+                enemy_speed = 4
+                game_over = False
+
+            if event.key == pygame.K_TAB:
+                show_lb = not show_lb
+                if show_lb:
+                    leaderboard = get_leaderboard()
+
+    keys = pygame.key.get_pressed()
+
+    if not game_over:
+        if keys[pygame.K_LEFT]:
+            player_pos[0] -= player_speed
+        if keys[pygame.K_RIGHT]:
+            player_pos[0] += player_speed
+
+        spawn_enemy()
+        update_enemies()
+
+        if collision():
+            send_score()
+            game_over = True
+
+        pygame.draw.rect(screen, WHITE, (*player_pos, player_size, player_size))
+        for e in enemies:
+            pygame.draw.rect(screen, RED, (*e, enemy_size, enemy_size))
+
+        text = font.render(f"Score: {score}", True, WHITE)
+        screen.blit(text, (10, 10))
+
+    else:
+        text = font.render("GAME OVER - Press R", True, RED)
+        screen.blit(text, (200, 250))
+
+    # =========================
+    # LEADERBOARD
+    # =========================
+    if show_lb:
+        y = 50
+        title = font.render("LEADERBOARD TOP 50", True, WHITE)
+        screen.blit(title, (500, 10))
+
+        for i, entry in enumerate(leaderboard[:50]):
+            line = font.render(f"{i+1}. {entry['name']} - {entry['score']}", True, WHITE)
+            screen.blit(line, (500, y))
+            y += 25
+
+    pygame.display.flip()
+    clock.tick(60)
+
+pygame.quit()
