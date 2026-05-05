@@ -3,173 +3,119 @@ import requests
 import random
 import sys
 
-# =========================
-# SERVER URL
-# =========================
-API_URL = "https://mygame-yougottabegood.onrender.com"
+API = "https://mygame-yougottabegood.onrender.com"
 
-# =========================
-# LOGIN (einfach über Konsole)
-# =========================
-print("1 = Login")
-print("2 = Register")
-choice = input("Wähle: ")
+# -------------------------
+# LOGIN
+# -------------------------
+print("1 Login")
+print("2 Register")
 
-username = input("Username: ")
-password = input("Password: ")
+mode = input("> ")
+name = input("Username: ")
+pw = input("Password: ")
 
-if choice == "2":
-    r = requests.post(API_URL + "/register", json={
-        "username": username,
-        "password": password
-    })
+if mode == "2":
+    r = requests.post(API + "/register", json={"username": name, "password": pw})
 else:
-    r = requests.post(API_URL + "/login", json={
-        "username": username,
-        "password": password
-    })
+    r = requests.post(API + "/login", json={"username": name, "password": pw})
 
 data = r.json()
 
 if "token" not in data:
-    print("Login fehlgeschlagen:", data)
+    print("Fehler:", data)
     sys.exit()
 
 TOKEN = data["token"]
-print("Login erfolgreich!")
+print("Login OK")
 
-# =========================
-# GAME SETUP
-# =========================
+# -------------------------
+# GAME
+# -------------------------
 pygame.init()
 
-WIDTH, HEIGHT = 800, 600
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("Online Arcade Game")
+W, H = 800, 600
+screen = pygame.display.set_mode((W, H))
 clock = pygame.time.Clock()
 
-WHITE = (255, 255, 255)
-RED = (255, 0, 0)
-
-player_size = 50
-player_pos = [WIDTH//2, HEIGHT-100]
-base_speed = 6
-player_speed = base_speed
-
-enemy_size = 50
+player = [400, 500]
 enemies = []
-enemy_speed = 4
 
 score = 0
+speed = 5
+
 font = pygame.font.SysFont("Arial", 30)
 
-# =========================
-# FUNCTIONS
-# =========================
-def spawn_enemy():
+def spawn():
     if random.random() < 0.03:
-        enemies.append([random.randint(0, WIDTH-enemy_size), 0])
+        enemies.append([random.randint(0, W-50), 0])
 
-def update_enemies():
-    global score, enemy_speed
+def move():
+    global score, speed
     for e in enemies[:]:
-        e[1] += enemy_speed
-        if e[1] > HEIGHT:
+        e[1] += speed
+        if e[1] > H:
             enemies.remove(e)
             score += 1
-            enemy_speed += 0.1
+            speed += 0.1
 
-def collision():
-    px, py = player_pos
+def hit():
+    px, py = player
     for ex, ey in enemies:
-        if ex < px < ex+enemy_size or ex < px+player_size < ex+enemy_size:
-            if ey < py < ey+enemy_size or ey < py+player_size < ey+enemy_size:
-                return True
+        if ex < px < ex+50 and ey < py < ey+50:
+            return True
     return False
 
-def send_score():
-    try:
-        requests.post(API_URL + "/score", json={
-            "token": TOKEN,
-            "score": score
-        })
-    except:
-        print("Server nicht erreichbar")
+def send():
+    requests.post(API + "/score", json={
+        "token": TOKEN,
+        "score": score
+    })
 
-def get_leaderboard():
-    try:
-        r = requests.get(API_URL + "/leaderboard")
-        return r.json()
-    except:
-        return []
-
-# =========================
-# GAME LOOP
-# =========================
-running = True
+run = True
 game_over = False
-show_lb = False
-leaderboard = []
 
-while running:
-    screen.fill((0, 0, 0))
+while run:
+    screen.fill((0,0,0))
 
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
+    for e in pygame.event.get():
+        if e.type == pygame.QUIT:
+            run = False
 
-        if event.type == pygame.KEYDOWN:
-            if game_over and event.key == pygame.K_r:
-                # reset
-                player_pos = [WIDTH//2, HEIGHT-100]
-                enemies.clear()
+        if game_over and e.type == pygame.KEYDOWN:
+            if e.key == pygame.K_r:
+                player = [400, 500]
+                enemies = []
                 score = 0
-                enemy_speed = 4
+                speed = 5
                 game_over = False
-
-            if event.key == pygame.K_TAB:
-                show_lb = not show_lb
-                if show_lb:
-                    leaderboard = get_leaderboard()
 
     keys = pygame.key.get_pressed()
 
     if not game_over:
         if keys[pygame.K_LEFT]:
-            player_pos[0] -= player_speed
+            player[0] -= 7
         if keys[pygame.K_RIGHT]:
-            player_pos[0] += player_speed
+            player[0] += 7
 
-        spawn_enemy()
-        update_enemies()
+        spawn()
+        move()
 
-        if collision():
-            send_score()
+        if hit():
+            send()
             game_over = True
 
-        pygame.draw.rect(screen, WHITE, (*player_pos, player_size, player_size))
-        for e in enemies:
-            pygame.draw.rect(screen, RED, (*e, enemy_size, enemy_size))
+        pygame.draw.rect(screen, (255,255,255), (*player, 50, 50))
 
-        text = font.render(f"Score: {score}", True, WHITE)
-        screen.blit(text, (10, 10))
+        for e in enemies:
+            pygame.draw.rect(screen, (255,0,0), (*e, 50, 50))
+
+        txt = font.render(f"Score: {score}", True, (255,255,255))
+        screen.blit(txt, (10,10))
 
     else:
-        text = font.render("GAME OVER - Press R", True, RED)
-        screen.blit(text, (200, 250))
-
-    # =========================
-    # LEADERBOARD
-    # =========================
-    if show_lb:
-        y = 50
-        title = font.render("LEADERBOARD TOP 50", True, WHITE)
-        screen.blit(title, (500, 10))
-
-        for i, entry in enumerate(leaderboard[:50]):
-            line = font.render(f"{i+1}. {entry['name']} - {entry['score']}", True, WHITE)
-            screen.blit(line, (500, y))
-            y += 25
+        txt = font.render("GAME OVER - R to restart", True, (255,0,0))
+        screen.blit(txt, (200,300))
 
     pygame.display.flip()
     clock.tick(60)
